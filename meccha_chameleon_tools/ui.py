@@ -111,7 +111,7 @@ def draw_corner_box(painter, pos, camera, screen_w, screen_h,
     for lx, ly, lz in corners_local:
         rx = lx * cy - lz * sy
         rz = lx * sy + lz * cy
-        s = w2s((pos[0] + rx, pos[1] + ly, pos[2] + rz), camera, screen_w, screen_h)
+        s = w2s((pos[0] + rx, pos[1] + ly, pos[2] + rz + (h / 2)), camera, screen_w, screen_h)
         if s:
             pts.append(s)
     if len(pts) < 4:
