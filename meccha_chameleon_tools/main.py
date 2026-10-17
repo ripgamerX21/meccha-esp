@@ -26,7 +26,7 @@ def main():
     app = QApplication(sys.argv)
 
     config = load_config()
-    _tr.set_language(config.language)
+    _tr.set_language("EN")
 
     try:
         esp = MecchaESP()
