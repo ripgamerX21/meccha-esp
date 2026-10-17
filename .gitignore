@@ -1,1 +1,13 @@
-1
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+*.log
+esp_config.json
+dist/
+build/
+*.spec
