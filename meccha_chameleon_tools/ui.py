@@ -726,7 +726,7 @@ class Overlay(QWidget):
 
             if self.config.snap_lines:
                 painter.setPen(QPen(QColor(*color), 1))
-                painter.drawLine(int(w / 2), int(h), int(sx), int(sy))
+                painter.drawLine(int(w / 2), int(h / 2), int(sx), int(sy))
 
             label_parts = []
             if self.config.show_names:
