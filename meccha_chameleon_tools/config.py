@@ -2,7 +2,7 @@
 import json
 import os
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Tuple
 
 if getattr(sys, "frozen", False):
@@ -67,6 +67,15 @@ class Config:
     radar_size: int = 180
     radar_range: float = 5000.0
     radar_opacity: int = 160
+
+    # Aimbot
+    aimbot_enabled: bool = False
+    aimbot_key: str = "MB5"
+    aimbot_fov: int = 150
+    aimbot_smooth: float = 0.30
+    aimbot_target_offset: float = 90.0
+    aimbot_show_fov: bool = True
+    show_debug: bool = False
 
     # Process
     game_process_name: str = "PenguinHotel-Win64-Shipping.exe"
