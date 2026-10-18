@@ -62,6 +62,14 @@ def rfloat(pm, addr):
         return 0.0
 
 
+def wfloat(pm, addr, value):
+    try:
+        pm.write_bytes(addr, struct.pack("<f", value), 4)
+        return True
+    except Exception:
+        return False
+
+
 def rvec3(pm, addr):
     try:
         return struct.unpack("<ddd", pm.read_bytes(addr, 24))
