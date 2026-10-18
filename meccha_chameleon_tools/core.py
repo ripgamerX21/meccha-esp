@@ -470,12 +470,16 @@ class MecchaESP:
         fov = rfloat(self.pm, pov + self.offsets["FMinimalViewInfo::FOV"])
         return {"loc": loc, "rot": rot, "fov": fov}
 
-    def get_actor_root_pos(self, actor):
+      def get_actor_root_pos(self, actor):
         root = rp(self.pm, actor + self.offsets["AActor::RootComponent"])
         if not root:
             return None
         return rvec3(self.pm, root + self.offsets["USceneComponent::RelativeLocation"])
 
+    def _actor_position(self, actor):
+        """Alias for get_actor_root_pos (used by the aimbot logic)."""
+        return self.get_actor_root_pos(actor)
+        
     def get_actor_root_rotation(self, actor):
         root = rp(self.pm, actor + self.offsets["AActor::RootComponent"])
         if not root:
