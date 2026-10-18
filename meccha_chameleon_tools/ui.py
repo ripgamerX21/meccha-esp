@@ -9,13 +9,13 @@ import threading
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QCheckBox, QLabel,
     QVBoxLayout, QHBoxLayout, QPushButton, QFrame,
-    QSpinBox, QListWidget, QStackedWidget, QScrollArea, QSizeGrip,
+    QSpinBox, QDoubleSpinBox, QListWidget, QStackedWidget, QScrollArea, QSizeGrip,
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QPen, QColor, QFont, QBrush
 
 from meccha_chameleon_tools.core import (
-    MecchaESP, dist,
+    MecchaESP, dist, rp, rfloat, wfloat
 )
 from meccha_chameleon_tools.config import Config, save_config, load_config
 from meccha_chameleon_tools.translations import _tr
@@ -80,10 +80,8 @@ def draw_2d_box(painter, pos, camera, screen_w, screen_h,
     for lx, ly, lz in corners_local:
         rx = lx * cy - lz * sy
         rz = lx * sy + lz * cy
-        
-        # FIXED: Shift the Z axis (pos[2]) up by half the height so it centers on the body
+        # Shift Z axis up by half height to center on body
         s = w2s((pos[0] + rx, pos[1] + ly, pos[2] + rz + (h / 2)), camera, screen_w, screen_h)
-        
         if s:
             pts.append(s)
     if len(pts) < 4:
@@ -163,6 +161,45 @@ def draw_radar(painter, cam, local_pos, players, radar_cx, radar_cy, radar_size,
 
 
 # ---------------------------------------------------------------------------
+# Key Recorder
+# ---------------------------------------------------------------------------
+class KeyRecorder:
+    def __init__(self, on_record):
+        self.on_record = on_record
+        self.active = False
+        self._timer = QTimer()
+        self._timer.timeout.connect(self._poll)
+        self._start_tick = 0
+
+    def start(self):
+        self.active = True
+        self._start_tick = ctypes.windll.kernel32.GetTickCount()
+        self._timer.start(50)
+
+    def stop(self):
+        self.active = False
+        self._timer.stop()
+
+    def _poll(self):
+        elapsed = ctypes.windll.kernel32.GetTickCount() - self._start_tick
+        if elapsed < 300:
+            return
+        for vk in range(1, 0x100):
+            if ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000:
+                # Basic mapping for the most common keys
+                key_names = {
+                    0x01: "LMB", 0x02: "RMB", 0x04: "MMB", 0x05: "MB4", 0x06: "MB5",
+                    0x10: "Shift", 0x11: "Ctrl", 0x12: "Alt", 0x20: "Space",
+                }
+                name = key_names.get(vk, f"VK_{vk:02X}")
+                self.stop()
+                self.on_record(name)
+                return
+        if elapsed > 5000:
+            self.stop()
+
+
+# ---------------------------------------------------------------------------
 # Menu
 # ---------------------------------------------------------------------------
 class Menu(QWidget):
@@ -200,22 +237,23 @@ class Menu(QWidget):
         QPushButton#primaryBtn:hover { background: #6d9bff; }
         QPushButton#dangerBtn { background-color: #3a2026; color: #ff9b9b; border-color: #5a2f38; }
         QPushButton#dangerBtn:hover { background-color: #4d2a31; color: #ffb3b3; }
-        QSpinBox { background-color: #14171f; color: #d7dbe6;
+        QSpinBox, QDoubleSpinBox { background-color: #14171f; color: #d7dbe6;
             border: 1px solid #2b3140; padding: 3px 8px; border-radius: 6px;
             font-size: 11px; min-height: 24px; }
-        QSpinBox:focus { border-color: #5b8cff; }
+        QSpinBox:focus, QDoubleSpinBox:focus { border-color: #5b8cff; }
     """
 
     def __init__(self, config: Config, esp: MecchaESP, tabs=None):
         super().__init__()
         self.config = config
         self.esp = esp
-        self._active_tabs = tabs or ["ESP", "RADAR"]
+        self._active_tabs = tabs or ["ESP", "AIMBOT", "RADAR"]
         self.setWindowTitle("Meccha Chameleon ESP")
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self._drag_pos = None
         self._container = None
+        self._key_recorder = KeyRecorder(self._on_key_recorded)
         self._outer_layout = QVBoxLayout(self)
         self._outer_layout.setContentsMargins(0, 0, 0, 0)
         self._build_ui()
@@ -224,6 +262,18 @@ class Menu(QWidget):
 
     def _close_app(self):
         QApplication.quit()
+
+    def _on_key_recorded(self, name):
+        self.config.aimbot_key = name
+        self.lbl_aim_key.setText(_tr("Aim Key: {key}", key=name))
+        self.btn_record_key.setEnabled(True)
+        self.btn_record_key.setText(_tr("Record Key"))
+
+    def _start_aim_key_record(self):
+        self.btn_record_key.setEnabled(False)
+        self.btn_record_key.setText(_tr("Press key..."))
+        self._key_recorder = KeyRecorder(self._on_key_recorded)
+        self._key_recorder.start()
 
     def _build_ui(self):
         container = QFrame(self)
@@ -270,7 +320,7 @@ class Menu(QWidget):
             QListWidget::item:hover:!selected {{ background: {self.C['surface2']}; color: {self.C['text']}; }}
         """)
         for t in self._active_tabs:
-            self.tab_list.addItem(f"{'◈' if t == 'ESP' else '◉'}  {_tr(t)}")
+            self.tab_list.addItem(f"{'◈' if t == 'ESP' else '⊕' if t == 'AIMBOT' else '◉'}  {_tr(t)}")
         self.tab_list.currentRowChanged.connect(self._switch_tab)
 
         self.stack = QStackedWidget()
@@ -315,6 +365,8 @@ class Menu(QWidget):
 
         if "ESP" in self._active_tabs:
             self._build_esp_tab()
+        if "AIMBOT" in self._active_tabs:
+            self._build_aimbot_tab()
         if "RADAR" in self._active_tabs:
             self._build_radar_tab()
 
@@ -350,8 +402,8 @@ class Menu(QWidget):
         row.addWidget(widget)
         return row
 
-    def _spin(self, value, vmin, vmax, step, on_change):
-        spn = QSpinBox()
+    def _spin(self, value, vmin, vmax, step, on_change, double=False):
+        spn = QDoubleSpinBox() if double else QSpinBox()
         spn.setRange(vmin, vmax)
         spn.setSingleStep(step)
         spn.setValue(value)
@@ -427,6 +479,56 @@ class Menu(QWidget):
 
         lo.addStretch()
 
+    def _build_aimbot_tab(self):
+        p = self._pages["AIMBOT"]
+        lo = QVBoxLayout(p)
+        lo.setContentsMargins(4, 4, 4, 4)
+        lo.setSpacing(10)
+
+        card, clo = self._card()
+        clo.addWidget(self._section_header(_tr("AIMBOT"), self.C["bad"]))
+        
+        self.cb_aimbot = self._chk(_tr("Aimbot Enabled"), "aimbot_enabled")
+        self.cb_aim_fov = self._chk(_tr("Show FOV Circle"), "aimbot_show_fov")
+        self.cb_debug = self._chk(_tr("Show Debug Console"), "show_debug")
+        
+        clo.addWidget(self.cb_aimbot)
+        clo.addWidget(self.cb_aim_fov)
+        clo.addWidget(self.cb_debug)
+
+        kr_lbl = QLabel(_tr("Aim Key: {key}", key=self.config.aimbot_key))
+        kr_btn = QPushButton(_tr("Record Key"))
+        kr_btn.clicked.connect(self._start_aim_key_record)
+        self.lbl_aim_key = kr_lbl
+        self.btn_record_key = kr_btn
+        
+        kr = QHBoxLayout()
+        kr.addWidget(kr_lbl)
+        kr.addStretch(1)
+        kr.addWidget(kr_btn)
+        clo.addLayout(kr)
+
+        clo.addLayout(self._labeled_row(
+            _tr("FOV Radius:"),
+            self._spin(self.config.aimbot_fov, 10, 600, 1,
+                       lambda v: setattr(self.config, "aimbot_fov", v)),
+        ))
+        
+        clo.addLayout(self._labeled_row(
+            _tr("Smooth:"),
+            self._spin(self.config.aimbot_smooth, 0.01, 1.0, 0.05,
+                       lambda v: setattr(self.config, "aimbot_smooth", v), double=True),
+        ))
+        
+        clo.addLayout(self._labeled_row(
+            _tr("Target Offset:"),
+            self._spin(int(self.config.aimbot_target_offset), -200, 200, 1,
+                       lambda v: setattr(self.config, "aimbot_target_offset", float(v))),
+        ))
+        
+        lo.addWidget(card)
+        lo.addStretch()
+
     def _build_radar_tab(self):
         p = self._pages["RADAR"]
         lo = QVBoxLayout(p)
@@ -485,6 +587,29 @@ class Menu(QWidget):
 # ---------------------------------------------------------------------------
 class Overlay(QWidget):
     PLAYER_GRACE_S = 0.5
+
+    AIM_KEY_VK = {
+        "LMB": 0x01, "RMB": 0x02, "MMB": 0x04, "MB4": 0x05, "MB5": 0x06,
+        "Backspace": 0x08, "Tab": 0x09, "Enter": 0x0D, "Shift": 0x10,
+        "Ctrl": 0x11, "Alt": 0x12, "Pause": 0x13, "Esc": 0x1B, "Space": 0x20,
+        "PageUp": 0x21, "PageDown": 0x22, "End": 0x23, "Home": 0x24,
+        "Left": 0x25, "Up": 0x26, "Right": 0x27, "Down": 0x28,
+        "Insert": 0x2D, "Delete": 0x2E,
+        "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34,
+        "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
+        "A": 0x41, "B": 0x42, "C": 0x43, "D": 0x44, "E": 0x45, "F": 0x46,
+        "G": 0x47, "H": 0x48, "I": 0x49, "J": 0x4A, "K": 0x4B, "L": 0x4C,
+        "M": 0x4D, "N": 0x4E, "O": 0x4F, "P": 0x50, "Q": 0x51, "R": 0x52,
+        "S": 0x53, "T": 0x54, "U": 0x55, "V": 0x56, "W": 0x57, "X": 0x58,
+        "Y": 0x59, "Z": 0x5A,
+        "Num0": 0x60, "Num1": 0x61, "Num2": 0x62, "Num3": 0x63, "Num4": 0x64,
+        "Num5": 0x65, "Num6": 0x66, "Num7": 0x67, "Num8": 0x68, "Num9": 0x69,
+        "F1": 0x70, "F2": 0x71, "F3": 0x72, "F4": 0x73, "F5": 0x74,
+        "F6": 0x75, "F7": 0x76, "F8": 0x77, "F9": 0x78, "F10": 0x79,
+        "F11": 0x7A, "F12": 0x7B,
+        ";": 0xBA, "=": 0xBB, ",": 0xBC, "-": 0xBD, ".": 0xBE, "/": 0xBF,
+        "`": 0xC0, "[": 0xDB, "\\": 0xDC, "]": 0xDD, "'": 0xDE,
+    }
 
     def __init__(self, esp: MecchaESP, config: Config):
         super().__init__()
@@ -590,6 +715,7 @@ class Overlay(QWidget):
                 if snap is not None:
                     with self._snapshot_lock:
                         self._snapshot = snap
+                    self._apply_aim(snap)
             except Exception:
                 pass
             time.sleep(0.002)
@@ -603,7 +729,7 @@ class Overlay(QWidget):
         current = {}
         try:
             for pdata in self.esp.iter_players(
-                include_local=cfg.show_local,
+                include_local=False, # Hardcoded to false to prevent aiming at self
                 team_filter=cfg.team_filter,
                 enemy_only=cfg.enemy_only,
             ):
@@ -649,6 +775,140 @@ class Overlay(QWidget):
                 pass
 
         return {"cam": cam, "players": players, "actors": actors, "ok": True, "off": False}
+
+    def _apply_aim(self, snap):
+        cfg = self.config
+        if not cfg.aimbot_enabled:
+            return
+        cam = snap.get("cam")
+        if not cam:
+            return
+        
+        w = self._cached_w
+        h = self._cached_h
+        best_target = self._find_best_target(cam, w, h)
+        key_held = self._aim_key_held()
+        
+        if cfg.show_debug:
+            print(f"[AIM-DEBUG] key_held={key_held} best_target={best_target[0] if best_target else None}")
+            
+        if best_target and key_held:
+            self._aim_at(best_target[0], best_target[1])
+
+    def _aim_key_held(self):
+        vk = self.AIM_KEY_VK.get(self.config.aimbot_key, 0x06)
+        held = bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+        if self.config.show_debug:
+            print(f"[AIM-DEBUG] aim_key='{self.config.aimbot_key}' vk={hex(vk)} held={held}")
+        return held
+
+    def _find_best_target(self, camera, screen_w, screen_h):
+        world = self.esp._get_world()
+        local_pc = self.esp._get_local_controller(world) if world else 0
+        local_pawn = rp(self.esp.pm, local_pc + self.esp.offsets["APlayerController::AcknowledgedPawn"]) if local_pc else 0
+        local_pos = self.esp._actor_position(local_pawn) if local_pawn else None
+
+        cx, cy = screen_w / 2, screen_h / 2
+        cam_loc = camera["loc"]
+
+        if not local_pawn:
+            if self.config.show_debug:
+                print("[AIM-DEBUG] local pawn not resolved; refusing to aim")
+            return None
+
+        best_dist = float("inf")
+        best_target = None
+        count = 0
+        
+        # Note: Removed players_only=True because core.py doesn't support it
+        for pdata in self.esp.iter_players(include_local=False):
+            if pdata["is_local"]:
+                continue
+            pos = pdata["pos"]
+            
+            if local_pos:
+                dself = math.sqrt((pos[0] - local_pos[0]) ** 2 +
+                                  (pos[1] - local_pos[1]) ** 2 +
+                                  (pos[2] - local_pos[2]) ** 2)
+                if dself < 150.0:
+                    continue
+                    
+            dcam = math.sqrt((pos[0] - cam_loc[0]) ** 2 +
+                             (pos[1] - cam_loc[1]) ** 2 +
+                             (pos[2] - cam_loc[2]) ** 2)
+            if dcam < 100.0:
+                continue
+                
+            count += 1
+            aim_pos = (pos[0], pos[1], pos[2] + self.config.aimbot_target_offset)
+            s = w2s(aim_pos, camera, screen_w, screen_h)
+            if not s:
+                continue
+                
+            dx = s[0] - cx
+            dy = s[1] - cy
+            d = math.sqrt(dx * dx + dy * dy)
+            
+            if d <= self.config.aimbot_fov and d < best_dist:
+                best_dist = d
+                best_target = (aim_pos, camera)
+                
+        if self.config.show_debug:
+            print(f"[AIM-DEBUG] candidates={count} best_target={best_target[0] if best_target else None} fov={self.config.aimbot_fov}")
+        return best_target
+
+    def _vector_to_rotation(self, vec):
+        x, y, z = vec
+        length = math.sqrt(x * x + y * y + z * z)
+        if length == 0:
+            return (0.0, 0.0, 0.0)
+        x, y, z = x / length, y / length, z / length
+        pitch = -math.degrees(math.asin(z))
+        yaw = math.degrees(math.atan2(y, x))
+        return (pitch, yaw, 0.0)
+
+    def _read_control_rotation(self):
+        world = self.esp._get_world()
+        if not world:
+            return None
+        pc = self.esp._get_local_controller(world)
+        if not pc:
+            return None
+        addr = pc + self.esp.offsets["AController::ControlRotation"]
+        rot = (rfloat(self.esp.pm, addr), rfloat(self.esp.pm, addr + 4), rfloat(self.esp.pm, addr + 8))
+        if self.config.show_debug:
+            print(f"[AIM-DEBUG] ControlRotation={rot} addr={hex(addr)} pc={hex(pc)}")
+        return rot
+
+    def _write_control_rotation(self, rot):
+        world = self.esp._get_world()
+        if not world:
+            return False
+        pc = self.esp._get_local_controller(world)
+        if not pc:
+            return False
+        addr = pc + self.esp.offsets["AController::ControlRotation"]
+        ok = (wfloat(self.esp.pm, addr, rot[0]) and
+              wfloat(self.esp.pm, addr + 4, rot[1]) and
+              wfloat(self.esp.pm, addr + 8, rot[2]))
+        if self.config.show_debug:
+            print(f"[AIM-DEBUG] write ControlRotation={rot} ok={ok}")
+        return ok
+
+    def _aim_at(self, target_pos, camera):
+        if not camera:
+            return
+        current = self._read_control_rotation()
+        if current is None:
+            return
+        dx = target_pos[0] - camera["loc"][0]
+        dy = target_pos[1] - camera["loc"][1]
+        dz = target_pos[2] - camera["loc"][2]
+        target_rot = self._vector_to_rotation((dx, dy, dz))
+        smooth = self.config.aimbot_smooth
+        new_pitch = current[0] + (target_rot[0] - current[0]) * smooth
+        new_yaw = current[1] + (target_rot[1] - current[1]) * smooth
+        self._write_control_rotation((new_pitch, new_yaw, current[2]))
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -729,7 +989,7 @@ class Overlay(QWidget):
 
             if self.config.snap_lines:
                 painter.setPen(QPen(QColor(*color), 1))
-                painter.drawLine(int(w / 2), int(h / 2), int(sx), int(sy))
+                painter.drawLine(int(w / 2), int(h / 2), int(sx), int(sy)) # Traces from crosshair
 
             label_parts = []
             if self.config.show_names:
@@ -766,6 +1026,17 @@ class Overlay(QWidget):
         painter.setPen(QPen(QColor(255, 255, 255)))
         painter.drawText(10, 20, _tr("Players: {count}", count=len(non_local)))
 
+        # --- Aimbot FOV Circle ---
+        if self.config.aimbot_enabled:
+            cx, cy = w / 2, h / 2
+            if self.config.aimbot_show_fov:
+                painter.setPen(QPen(QColor(255, 255, 255), 1))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(int(cx - self.config.aimbot_fov),
+                                    int(cy - self.config.aimbot_fov),
+                                    self.config.aimbot_fov * 2,
+                                    self.config.aimbot_fov * 2)
+
         if self.config.radar_enabled and local_pos:
             radar_x = w - self.config.radar_size - 20
             radar_y = 20 + self.config.radar_size // 2
@@ -773,6 +1044,9 @@ class Overlay(QWidget):
             for p in enemy_list:
                 p["color"] = self.config.enemy_color
             draw_radar(painter, cam, local_pos, enemy_list,
+                       radar_x, radar_y,
+                       self.config.radar_size, self.config.radar_range,
+                       self.config.radar_color, self.config.radar_opacity)
                        radar_x, radar_y,
                        self.config.radar_size, self.config.radar_range,
                        self.config.radar_color, self.config.radar_opacity)
